@@ -1,0 +1,128 @@
+import pandas as pd
+import streamlit as st
+from io import BytesIO
+import numpy as np
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font, Border, Side
+
+def process_data(route_data, products_data):
+    # Process Route Data
+    route_df = pd.read_csv(route_data)
+    fill_cols = ['Route', 'Driver', 'Stop', 'Address', 'Shipping name']
+    route_df[fill_cols] = route_df[fill_cols].ffill()
+    route_df['Address'] = route_df['Address'].str.split(',').str[0].ffill()
+    
+    # Process Products Data
+    df_plist = pd.read_csv(products_data)
+    df_plist = df_plist[['Title', 'Tags', 'Variant SKU', 'Vendor']].dropna(subset=['Tags'])
+    df_plist['Product type'] = df_plist['Tags'].apply(determine_product_type)
+    df_plist['Lineitem name'] = df_plist['Title']
+    
+    # Merge DataFrames
+    route_df['Lineitem name'] = route_df['Items'].str[3:]
+    route_df['Item Count'] = route_df['Items'].str[:3].str.extract('(\d+)')
+    route_df = pd.merge(route_df, df_plist, on='Lineitem name', how='left')
+    
+    # Final processing
+    route_df['Count'] = np.where(route_df['Item Count'] != "1", route_df['Item Count'], '')
+    route_df = route_df[['Driver','Stop','Shipping name','Address','Count', 
+                        "Item Count", "Lineitem name",'Total items','Note','time','dist']]
+    
+    return route_df, df_plist
+
+def determine_product_type(tag):
+    tag = str(tag)
+    if '蔬菜水果类' in tag or '独家订阅包' in tag:
+        return 'vege & fruit'
+    elif '冰冻冷藏类' in tag:
+        return 'cool'
+    elif '常温类' in tag:
+        return 'general'
+    return 'other'
+
+def create_routing_file(route_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for driver, group in route_df.groupby('Driver'):
+            final = group[['Address', "Count", "Lineitem name", 'Total items', 
+                         'Note', 'time', 'dist', 'Stop']]
+            
+            # Add totals
+            sums = final[['Total items', 'time', 'dist']].sum()
+            final = final.append(sums.rename('Total'))
+            
+            final.to_excel(writer, sheet_name=driver, index=False)
+            worksheet = writer.sheets[driver]
+            worksheet.set_footer(f'&C{driver} &P &20 &"Arial,Bold Italic"')
+    
+    return format_excel_file(output)
+
+def create_packing_file(packing_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for driver, group in packing_df.groupby('Driver'):
+            final = group[["Product type", "Count_New", "Lineitem name", 
+                         "Count", "Variant SKU", 'Vendor']]
+            
+            # Add totals
+            sums = final[['Count']].sum()
+            final = final.append(sums.rename('Total'))
+            
+            final.to_excel(writer, sheet_name=driver, index=False)
+            worksheet = writer.sheets[driver]
+            worksheet.set_footer(f'&C{driver} &P &20 &"Arial,Bold Italic"')
+    
+    return format_excel_file(output)
+
+def format_excel_file(buffer):
+    buffer.seek(0)
+    wb = load_workbook(buffer)
+    for ws in wb.worksheets:
+        thin_border = Border(left=Side(style='thin'), 
+                           right=Side(style='thin'), 
+                           top=Side(style='thin'), 
+                           bottom=Side(style='thin'))
+        
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+                cell.border = thin_border
+        
+        ws.freeze_panes = 'A2'
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+# Streamlit UI
+st.title("Route and Packing List Generator")
+
+route_file = st.file_uploader("Upload Route Data (CSV)", type="csv")
+products_file = st.file_uploader("Upload Products Data (CSV)", type="csv")
+
+if route_file and products_file:
+    try:
+        route_df, df_plist = process_data(route_file, products_file)
+        
+        # Generate Packing DataFrame
+        packing_df = route_df[['Driver', "Lineitem name", "Item Count"]]
+        packing_df['Count'] = packing_df['Item Count'].astype(int)
+        packing_df = packing_df.groupby(["Driver", "Lineitem name"]).sum().reset_index()
+        packing_df['Count_New'] = np.where(packing_df['Count'] > 1, packing_df['Count'], '')
+        packing_df = pd.merge(packing_df, df_plist, on='Lineitem name', how='left')
+        packing_df = packing_df.sort_values(by=["Driver", "Product type", "Variant SKU", "Lineitem name"])
+        
+        # Create files
+        routing_file = create_routing_file(route_df)
+        packing_file = create_packing_file(packing_df)
+        
+        # Download buttons
+        st.download_button("Download Routing", 
+                          data=routing_file, 
+                          file_name="Routing.xlsx")
+        
+        st.download_button("Download Packing", 
+                          data=packing_file, 
+                          file_name="Packing.xlsx")
+        
+    except Exception as e:
+        st.error(f"Error processing files: {str(e)}")
