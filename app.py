@@ -67,12 +67,17 @@ def create_routing_file(route_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for driver, group in route_df.groupby('Driver'):
-            final = group[['Address', "Count", "Lineitem name", 'Total items', 
-                         'Note', 'time', 'dist', 'Stop']]
+            final = group[['Address', "Count", "Lineitem name", 'Total items', 'Note', 'time', 'dist', 'Stop']]
             
-            # Add totals
-            sums = final[['Total items', 'time', 'dist']].sum()
-            final = final.append(sums.rename('Total'))
+            # Add totals using pd.concat
+            totals_row = pd.DataFrame({
+                'Total items': [group['Total items'].sum()],
+                'time': [group['time'].sum()],
+                'dist': [group['dist'].sum()]
+            })
+            
+            final = pd.concat([final, totals_row], ignore_index=True)
+            final.rename(columns={"Total items": "Total"}, inplace=True)
             
             final.to_excel(writer, sheet_name=driver, index=False)
             worksheet = writer.sheets[driver]
@@ -84,12 +89,14 @@ def create_packing_file(packing_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for driver, group in packing_df.groupby('Driver'):
-            final = group[["Product type", "Count_New", "Lineitem name", 
-                         "Count", "Variant SKU", 'Vendor']]
+            final = group[["Product type", "Count_New", "Lineitem name", "Count", "Variant SKU", 'Vendor']]
             
-            # Add totals
-            sums = final[['Count']].sum()
-            final = final.append(sums.rename('Total'))
+            # Add totals using pd.concat
+            totals_row = pd.DataFrame({
+                'Count': [group['Count'].sum()]
+            })
+            
+            final = pd.concat([final, totals_row], ignore_index=True)
             
             final.to_excel(writer, sheet_name=driver, index=False)
             worksheet = writer.sheets[driver]
