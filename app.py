@@ -63,7 +63,58 @@ def determine_product_type(tag):
         return 'general'
     return 'other'
 
-# ... [Keep the rest of the functions from previous code unchanged] ...
+def create_routing_file(route_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for driver, group in route_df.groupby('Driver'):
+            final = group[['Address', "Count", "Lineitem name", 'Total items', 
+                         'Note', 'time', 'dist', 'Stop']]
+            
+            # Add totals
+            sums = final[['Total items', 'time', 'dist']].sum()
+            final = final.append(sums.rename('Total'))
+            
+            final.to_excel(writer, sheet_name=driver, index=False)
+            worksheet = writer.sheets[driver]
+            worksheet.set_footer(f'&C{driver} &P &20 &"Arial,Bold Italic"')
+    
+    return format_excel_file(output)
+
+def create_packing_file(packing_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for driver, group in packing_df.groupby('Driver'):
+            final = group[["Product type", "Count_New", "Lineitem name", 
+                         "Count", "Variant SKU", 'Vendor']]
+            
+            # Add totals
+            sums = final[['Count']].sum()
+            final = final.append(sums.rename('Total'))
+            
+            final.to_excel(writer, sheet_name=driver, index=False)
+            worksheet = writer.sheets[driver]
+            worksheet.set_footer(f'&C{driver} &P &20 &"Arial,Bold Italic"')
+    
+    return format_excel_file(output)
+
+def format_excel_file(buffer):
+    buffer.seek(0)
+    wb = load_workbook(buffer)
+    for ws in wb.worksheets:
+        thin_border = Border(left=Side(style='thin'), 
+                           right=Side(style='thin'), 
+                           top=Side(style='thin'), 
+                           bottom=Side(style='thin'))
+        
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+                cell.border = thin_border
+        
+        ws.freeze_panes = 'A2'
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
 
 # Streamlit UI
 st.title("Route and Packing List Generator")
